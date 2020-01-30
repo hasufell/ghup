@@ -1,0 +1,15 @@
+*.o
+*.hi
+*~
+dist/
+cabal-dev/
+.hsenv
+TAGS
+tags
+*.tag
+.stack-work/
+dist/
+dist-newstyle/
+.cabal-sandbox/
+cabal.sandbox.config
+
