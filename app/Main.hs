@@ -8,6 +8,7 @@ import           GHup
 import           GitHub.Auth
 import           HPath
 import           Options.Applicative
+import           System.Console.Pretty
 import           System.Exit
 
 
@@ -29,7 +30,8 @@ data ForkOptions = ForkOptions
   }
 
 data ConfigOptions = ConfigOptions {
-  oAuth :: ByteString
+    oAuth :: ByteString
+  , bPath :: Maybe ByteString
   }
 
 
@@ -45,8 +47,18 @@ opts = subparser
   )
 
 configOpts :: Parser ConfigOptions
-configOpts = ConfigOptions <$> strOption
-  (short 'o' <> long "oauth" <> metavar "OAUTH" <> help "The OAUTH token")
+configOpts =
+  ConfigOptions
+    <$> strOption
+          (short 'o' <> long "oauth" <> metavar "OAUTH" <> help
+            "The OAUTH token"
+          )
+    <*> optional
+          (strOption
+            ((short 'p') <> long "base-path" <> metavar "BASE_PATH" <> help
+              "The base path to clone into"
+            )
+          )
 
 forkOpts :: Parser ForkOptions
 forkOpts =
@@ -82,8 +94,10 @@ main = do
           Just p  -> prepareRepoForPR' repo (Just p) newBranch
           Nothing -> fail "Repo path must be absolute"
         Nothing -> prepareRepoForPR' repo Nothing newBranch
-    Config (ConfigOptions {..}) -> writeSettings (OAuth oAuth) <&> Right
-    Del    (DelOptions {..}   ) -> deleteFork' del
+    Config (ConfigOptions {..}) -> do
+      p <- maybe (pure Nothing) (fmap Just . parseAbs) bPath
+      writeSettings (Settings (OAuth oAuth) p) <&> Right
+    Del (DelOptions {..}) -> deleteFork' del
   case e of
-    Right () -> putStrLn "success!"
-    Left  t  -> die t
+    Right () -> _info "success!"
+    Left  t  -> die (color Red $ t)

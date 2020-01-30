@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric      #-}
+{-# LANGUAGE FlexibleInstances  #-}
 {-# LANGUAGE QuasiQuotes        #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# OPTIONS_GHC -Wno-orphans    #-}
@@ -9,6 +10,7 @@ module GHup
     ForkResult(..)
   , CloneMethod(..)
   , ProcessError(..)
+  , Settings(..)
   -- * Settings
   , getSettings
   , writeSettings
@@ -24,6 +26,10 @@ module GHup
   -- * Parsers
   , parseURL
   , ghURLParser
+  -- * Utils
+  , _info
+  , _warn
+  , _err
   )
 where
 
@@ -47,6 +53,10 @@ import           HPath
 import           HPath.IO
 import           Prelude                 hiding ( readFile
                                                 , writeFile
+                                                )
+import           System.Console.Pretty
+import           System.IO                      ( hPutStrLn
+                                                , stderr
                                                 )
 import           System.Posix.ByteString        ( getEnv
                                                 , RawFilePath
@@ -88,11 +98,22 @@ data UrlParseResult = UrlParseResult {
 
 
 data Settings = Settings {
-  auth :: Auth
+    auth     :: Auth
+  , basePath :: Maybe (Path Abs)
 } deriving (Eq, Read, Show)
 
 
 deriving instance Read Auth
+
+instance Read (Path Abs) where
+  readsPrec p input =
+    let str = readsPrec p input :: [(String, String)]
+    in  case str of
+          [(s, n)] -> case parseAbs (UTF8.fromString s) of
+            Just p' -> [(p', n)]
+            Nothing -> []
+          _ -> []
+
 
 
 
@@ -103,17 +124,16 @@ deriving instance Read Auth
 
 
 
-writeSettings :: Auth -> IO ()
-writeSettings auth = do
+writeSettings :: Settings -> IO ()
+writeSettings settings = do
   sf <- getSettingsFile
-  let settings = Settings auth
   let fileperms =
         ownerWriteMode
           `unionFileModes` ownerReadMode
           `unionFileModes` groupWriteMode
           `unionFileModes` groupReadMode
   writeFile sf (Just fileperms) (u8 . show $ settings)
-  putStrLn ("Written config to file " <> (UTF8.toString $ toFilePath sf))
+  _info ("Written config to file " <> (UTF8.toString $ toFilePath sf))
 
 
 getSettingsFile :: IO (Path Abs)
@@ -136,7 +156,7 @@ getSettings = runExceptT (fromEnv <|> fromFile)
   fromEnv :: ExceptT String IO Settings
   fromEnv = do
     (lift $ getEnv (u8 "GITHUB_TOKEN")) >>= \case
-      Just t  -> pure $ Settings (OAuth t)
+      Just t  -> pure $ Settings (OAuth t) Nothing
       Nothing -> throwError "Not found"
   fromFile :: ExceptT String IO Settings
   fromFile = do
@@ -163,9 +183,12 @@ prepareRepoForPR' :: ByteString       -- ^ string that contains repo url
                   -> Maybe (Path b)   -- ^ base path where the repo should be cloned
                   -> Maybe ByteString -- ^ PR branch name to switch to
                   -> IO (Either String ())
-prepareRepoForPR' repoString repobase branch = runExceptT $ do
+prepareRepoForPR' repoString mRepobase branch = runExceptT $ do
   UrlParseResult {..} <- liftEither $ parseURL repoString
   Settings {..}       <- ExceptT getSettings
+  repobase            <- case mRepobase of
+    Just r  -> fmap Just $ lift $ toAbs r
+    Nothing -> pure basePath
   ExceptT $ prepareRepoForPR auth owner repo repobase branch
 
 
@@ -190,6 +213,10 @@ prepareRepoForPR am owner repo repobase branch = runExceptT $ do
   case branch of
     Just b  -> withExceptT show $ ExceptT $ createBranch b repodest
     Nothing -> pure ()
+  lift $ _info
+    (  "To change to the repo dir, run:\n\tcd "
+    <> (UTF8.toString $ toFilePath repodest)
+    )
 
 
 forkRepository :: AuthMethod am
@@ -238,8 +265,7 @@ createBranch branch repodir =
 
 -- | Same as deleteFork, but gets the auth from the config file
 -- and parses the owner/repo from the given repo url string.
-deleteFork' :: ByteString
-           -> IO (Either String ())
+deleteFork' :: ByteString -> IO (Either String ())
 deleteFork' repoString = runExceptT $ do
   UrlParseResult {..} <- liftEither $ parseURL repoString
   Settings {..}       <- ExceptT getSettings
@@ -326,3 +352,16 @@ getHomeDirectory = do
     Nothing -> do
       h <- PU.homeDirectory <$> (PU.getEffectiveUserID >>= PU.getUserEntryForID)
       pure $ u8 h -- this is a guess
+
+
+_info :: String -> IO ()
+_info = putStrLn . color Green
+
+_warn :: String -> IO ()
+_warn = _stderr . color Yellow
+
+_err :: String -> IO ()
+_err = _stderr . color Red
+
+_stderr :: String -> IO ()
+_stderr = hPutStrLn stderr
