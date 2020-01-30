@@ -254,7 +254,7 @@ deleteFork :: AuthMethod am
 deleteFork am owner repo = runExceptT $ do
   (withExceptT show $ ExceptT $ github' (repositoryR owner repo)) >>= \case
     (Repo { repoFork = Just True }) -> pure ()
-    _                               -> fail "Not a fork"
+    _                               -> throwError "Not a fork"
   withExceptT show $ ExceptT $ github am (deleteRepoR owner repo)
 
 
