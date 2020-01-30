@@ -1,0 +1,57 @@
+cabal-version:       2.4
+
+name:                ghup
+version:             0.1.0.0
+synopsis:            Simple github helpers
+-- description:
+bug-reports:         https://github.com/hasufell/ghup/issues
+license:             GPL-3.0-only
+license-file:        LICENSE
+author:              Julian Ospald <hasufell@posteo.de>
+maintainer:          Julian Ospald <hasufell@posteo.de>
+copyright:           Julian Ospald 2016
+category:            Network
+extra-source-files:  CHANGELOG.md
+                     README.md
+
+library
+  exposed-modules:     GHup
+  -- other-modules:
+  -- other-extensions:
+  build-depends:         attoparsec      ^>= 0.13
+                       , base            ^>= 4.12
+                       , bytestring      ^>= 0.10
+                       , github          ^>= 0.24
+                       , hpath           ^>= 0.11
+                       , hpath-io        ^>= 0.13.1
+                       , http-client     ^>= 0.6.4
+                       , mtl             ^>= 2.2
+                       , safe-exceptions ^>= 0.1
+                       , streamly        ^>= 0.7
+                       , text            ^>= 1.2
+                       , unix            ^>= 2.7
+                       , utf8-string     ^>= 1.0
+                       , word8           ^>= 0.1
+  hs-source-dirs:      lib
+  ghc-options:         -Wall
+  default-language:    Haskell2010
+  default-extensions:  LambdaCase, MultiWayIf, RecordWildCards
+
+executable ghup
+  main-is:             Main.hs
+  -- other-modules:
+  -- other-extensions:
+  build-depends:         base                 ^>= 4.12
+                       , bytestring           ^>= 0.10
+                       , ghup
+                       , github               ^>= 0.24
+                       , hpath                ^>= 0.11
+                       , optparse-applicative ^>= 0.15
+  hs-source-dirs:      app
+  default-language:    Haskell2010
+  default-extensions:  LambdaCase, MultiWayIf, RecordWildCards
+
+source-repository head
+  type:     git
+  location: https://github.com/hasufell/ghup
+
