@@ -1,7 +1,6 @@
 module Main where
 
 import           Control.Error.Util
-import           Control.Monad
 import           Control.Monad.Except
 import           Control.Monad.Reader
 import           Data.ByteString                ( ByteString )
@@ -11,24 +10,19 @@ import           Data.Dates                     ( getCurrentDateTime
                                                 , DateTime(..)
                                                 )
 import           Data.Functor                   ( (<&>) )
-import           Data.List
 import           Data.Maybe
 import           Data.Semigroup                 ( (<>) )
 import qualified Data.Text                     as T
 import           Data.Time.Calendar
 import           Data.Time.Clock
-import           Data.Time.Clock.POSIX
 import           Data.Time.Format
 import           Data.Time.Format.ISO8601
 import           GHup
 import           GitHub.Auth
-import           GitHub.Data.Definitions
-import           GitHub.Data.Name
 import           GitHub.Data.Repos
 import           GitHub.Data.URL
 import           HPath
 import           Options.Applicative
-import           Safe
 import           System.Console.Pretty
 import           System.Exit
 import           Text.Layout.Table
@@ -126,14 +120,14 @@ main :: IO ()
 main = do
   -- wrapper to run effects with settings
   let run e = do
-      settings <- exceptT
-            (\_ -> die
-                . color Red
-                $ "Could not get settings, make sure to run 'ghup config' first"
-            )
-            pure
-          $ getSettings
-      (flip runReaderT) settings . runExceptT . withExceptT show $ e
+        settings <- exceptT
+              (\_ -> die
+                  . color Red
+                  $ "Could not get settings, make sure to run 'ghup config' first"
+              )
+              pure
+            $ getSettings
+        (flip runReaderT) settings . runExceptT . withExceptT show $ e
   e <- execParser (info (opts <**> helper) idm) >>= \case
 
     -- fork
@@ -155,10 +149,10 @@ main = do
     -- list-forks
     ListForks (ListForkOptions {..}) -> run $ do
       mtime <- liftIO $ case lSince of
-        Just t -> do
+        Just t' -> do
           dt <- getCurrentDateTime
           let mt =
-                either (const Nothing) Just . parseDate dt . UTF8.toString $ t
+                either (const Nothing) Just . parseDate dt . UTF8.toString $ t'
           pure $ mt >>= \t ->
             (parseTimeM
               True
