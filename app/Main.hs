@@ -31,6 +31,7 @@ import           Options.Applicative
 import           Safe
 import           System.Console.Pretty
 import           System.Exit
+import           Text.Layout.Table
 
 
 
@@ -123,12 +124,9 @@ lForkOpts = ListForkOptions <$> optional
 
 main :: IO ()
 main = do
-  let
-    run e = do
-      settings <-
-        exceptT
-            (\_ ->
-              die
+  let run e = do
+      settings <- exceptT
+            (\_ -> die
                 . color Red
                 $ "Could not get settings, make sure to run 'ghup config' first"
             )
@@ -163,13 +161,17 @@ main = do
         Nothing -> pure Nothing
 
       forks <- withExceptT show $ getForks mtime
-      let formatted = intercalate "\n" $ fmap
-            (\Repo {..} ->
-              (T.unpack . getUrl $ repoHtmlUrl) <> " " <> formatShow
-                (iso8601Format :: Format Day)
-                (utctDay $ fromJust repoUpdatedAt)
-            )
-            forks
+      let formatted =
+            gridString [column expand left def def
+                       ,column expand left def def]
+              $ fmap
+                  (\Repo {..} ->
+                    [ (T.unpack . getUrl $ repoHtmlUrl)
+                    , formatShow (iso8601Format :: Format Day)
+                                 (utctDay $ fromJust repoUpdatedAt)
+                    ]
+                  )
+                  forks
       liftIO $ putStrLn $ formatted
       pure ()
   case e of

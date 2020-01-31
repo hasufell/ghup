@@ -55,6 +55,7 @@ executable ghup
                        , optparse-applicative ^>= 0.15
                        , pretty-terminal      ^>= 0.1
                        , safe                 ^>= 0.3
+                       , table-layout         ^>= 0.8
                        , text                 ^>= 1.2
                        , time                 ^>= 1.9
                        , utf8-string          ^>= 1.0
