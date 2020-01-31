@@ -48,6 +48,7 @@ import qualified Data.ByteString.UTF8          as UTF8
 import qualified Data.ByteString.Lazy.UTF8     as LUTF8
 import           Data.Functor                   ( (<&>) )
 import           Data.Proxy
+import qualified Data.Text                     as T
 import qualified Data.Text.Encoding            as E
 import           Data.Time.Clock
 import           Data.Word8
@@ -182,9 +183,9 @@ getSettings = (fromEnv <|> fromFile)
 
 
 
-    ----------------------------
-    --[ Github / Git actions ]--
-    ----------------------------
+    -------------------------------------
+    --[ Combined Github / Git actions ]--
+    -------------------------------------
 
 
 -- | Same as 'prepareRepoForPR', but gets the auth from the config file
@@ -238,14 +239,10 @@ prepareRepoForPR owner repo repobase branch = do
     )
 
 
-forkRepository :: (MonadIO m, MonadReader Settings m)
-               => Name Owner
-               -> Name Repo
-               -> ExceptT Error m ForkResult
-forkRepository owner repo = do
-  upstream   <- github_ (repositoryR owner repo)
-  downstream <- githubAuth (forkExistingRepoR owner repo Nothing)
-  pure $ ForkResult { .. }
+
+    -------------------
+    --[ Git actions ]--
+    -------------------
 
 
 cloneRepository :: (MonadIO m, MonadFail m)
@@ -284,6 +281,24 @@ createBranch branch repodir =
   _runGit [u8 "-C", toFilePath repodir, u8 "checkout", u8 "-b", branch]
 
 
+
+
+
+    ----------------------
+    --[ Github actions ]--
+    ----------------------
+
+
+forkRepository :: (MonadIO m, MonadReader Settings m)
+               => Name Owner
+               -> Name Repo
+               -> ExceptT Error m ForkResult
+forkRepository owner repo = do
+  upstream   <- github_ (repositoryR owner repo)
+  downstream <- githubAuth (forkExistingRepoR owner repo Nothing)
+  pure $ ForkResult { .. }
+
+
 -- | Same as deleteFork, but gets the auth from the config file
 -- and parses the owner/repo from the given repo url string.
 deleteFork' :: (MonadIO m, MonadReader Settings m)
@@ -291,19 +306,18 @@ deleteFork' :: (MonadIO m, MonadReader Settings m)
             -> ExceptT String m ()
 deleteFork' repoString = do
   UrlParseResult {..} <- liftEither $ parseURL repoString
-  deleteFork owner repo
+  withExceptT show $ deleteFork owner repo
 
 
 deleteFork :: (MonadIO m, MonadReader Settings m)
            => Name Owner
            -> Name Repo
-           -> ExceptT String m ()
+           -> ExceptT Error m ()
 deleteFork owner repo = do
-  (withExceptT show $ github_ (repositoryR owner repo)) >>= \case
+  github_ (repositoryR owner repo) >>= \case
     (Repo { repoFork = Just True }) -> pure ()
-    _                               -> throwError "Not a fork"
-  withExceptT show $ githubAuth (deleteRepoR owner repo)
-
+    _ -> throwError (UserError $ T.pack "Not a fork")
+  githubAuth (deleteRepoR owner repo)
 
 
 getForks :: (MonadIO m, MonadReader Settings m)
@@ -318,6 +332,7 @@ getForks mtime = do
       _ -> False
     )
     (toList repos)
+
 
 
 
