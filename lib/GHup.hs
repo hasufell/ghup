@@ -1,7 +1,10 @@
+{-# LANGUAGE DataKinds          #-}
 {-# LANGUAGE DeriveGeneric      #-}
+{-# LANGUAGE FlexibleContexts   #-}
 {-# LANGUAGE FlexibleInstances  #-}
 {-# LANGUAGE QuasiQuotes        #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeFamilies       #-}
 {-# OPTIONS_GHC -Wno-orphans    #-}
 
 module GHup
@@ -23,7 +26,6 @@ module GHup
   , createBranch
   , deleteFork'
   , deleteFork
-  , getForks'
   , getForks
   -- * Parsers
   , parseURL
@@ -37,7 +39,9 @@ where
 
 import           Control.Applicative
 import           Control.Exception.Safe
-import           Control.Monad.Except
+import           Control.Monad.Except    hiding ( fail )
+import           Control.Monad.Fail
+import           Control.Monad.Reader    hiding ( fail )
 import           Data.Attoparsec.ByteString
 import           Data.ByteString                ( ByteString )
 import qualified Data.ByteString.UTF8          as UTF8
@@ -58,6 +62,7 @@ import           HPath
 import           HPath.IO
 import           Prelude                 hiding ( readFile
                                                 , writeFile
+                                                , fail
                                                 )
 import           System.Console.Pretty
 import           System.IO                      ( hPutStrLn
@@ -103,8 +108,8 @@ data UrlParseResult = UrlParseResult {
 
 
 data Settings = Settings {
-    auth     :: Auth
-  , basePath :: Maybe (Path Abs)
+    _auth     :: Auth
+  , _basePath :: Maybe (Path Abs)
 } deriving (Eq, Read, Show)
 
 
@@ -129,7 +134,7 @@ instance Read (Path Abs) where
 
 
 
-writeSettings :: Settings -> IO ()
+writeSettings :: (MonadThrow m, MonadIO m) => Settings -> m ()
 writeSettings settings = do
   sf <- getSettingsFile
   let fileperms =
@@ -137,41 +142,41 @@ writeSettings settings = do
           `unionFileModes` ownerReadMode
           `unionFileModes` groupWriteMode
           `unionFileModes` groupReadMode
-  writeFile sf (Just fileperms) (u8 . show $ settings)
+  liftIO $ writeFile sf (Just fileperms) (u8 . show $ settings)
   _info ("Written config to file " <> (UTF8.toString $ toFilePath sf))
 
 
-getSettingsFile :: IO (Path Abs)
+getSettingsFile :: (MonadThrow m, MonadIO m) => m (Path Abs)
 getSettingsFile = do
   let app_dir = [rel|ghup|] :: Path Rel
-  getEnv (u8 "XDG_CONFIG_HOME") >>= \case
+  (liftIO $ getEnv (u8 "XDG_CONFIG_HOME")) >>= \case
     Just config -> do
       pc <- parseAbs config
       pure $ pc </> app_dir
     Nothing -> do
       let config_dir = [rel|.config|] :: Path Rel
-      home <- getHomeDirectory >>= parseAbs
+      home <- liftIO (getHomeDirectory >>= parseAbs)
       pure $ home </> config_dir </> app_dir
 
 
-getSettings :: IO (Either String Settings)
-getSettings = runExceptT (fromEnv <|> fromFile)
+getSettings :: (MonadThrow m, MonadIO m) => ExceptT String m Settings
+getSettings = (fromEnv <|> fromFile)
 
  where
-  fromEnv :: ExceptT String IO Settings
+  fromEnv :: MonadIO m => ExceptT String m Settings
   fromEnv = do
-    (lift $ getEnv (u8 "GITHUB_TOKEN")) >>= \case
+    (liftIO $ getEnv (u8 "GITHUB_TOKEN")) >>= \case
       Just t  -> pure $ Settings (OAuth t) Nothing
       Nothing -> throwError "Not found"
-  fromFile :: ExceptT String IO Settings
+  fromFile :: (MonadThrow m, MonadIO m) => ExceptT String m Settings
   fromFile = do
-    sf  <- lift $ getSettingsFile
+    sf  <- getSettingsFile
     out <-
       ExceptT
-        $ ( flip catchIOError (\e -> pure $ Left $ show e)
-          $ fmap Right
-          $ readFile sf
-          )
+      $ liftIO
+      $ (flip catchIOError (\e -> pure $ Left $ show e) $ fmap Right $ readFile
+          sf
+        )
     liftEither $ readEither (LUTF8.toString out)
 
 
@@ -184,35 +189,44 @@ getSettings = runExceptT (fromEnv <|> fromFile)
 
 -- | Same as 'prepareRepoForPR', but gets the auth from the config file
 -- and parses the owner/repo from the given repo url string.
-prepareRepoForPR' :: ByteString       -- ^ string that contains repo url
+prepareRepoForPR' :: ( MonadIO m
+                     , MonadReader Settings m
+                     , MonadFail m
+                     , MonadThrow m
+                     )
+                  => ByteString       -- ^ string that contains repo url
                   -> Maybe (Path b)   -- ^ base path where the repo should be cloned
                   -> Maybe ByteString -- ^ PR branch name to switch to
-                  -> IO (Either String ())
-prepareRepoForPR' repoString mRepobase branch = runExceptT $ do
+                  -> ExceptT String m ()
+prepareRepoForPR' repoString mRepobase branch = do
   UrlParseResult {..} <- liftEither $ parseURL repoString
-  Settings {..}       <- ExceptT getSettings
   repobase            <- case mRepobase of
-    Just r  -> fmap Just $ lift $ toAbs r
-    Nothing -> pure basePath
-  ExceptT $ prepareRepoForPR auth owner repo repobase branch
+    Just r  -> fmap Just $ liftIO $ toAbs r
+    Nothing -> basePath
+  prepareRepoForPR owner repo repobase branch
 
 
 
 -- | Fork the repository to my account, clone it, add original upstream
 -- as remote, optionally switch to the given branch.
-prepareRepoForPR :: AuthMethod am
-                 => am
-                 -> Name Owner
+prepareRepoForPR :: ( MonadIO m
+                    , MonadReader Settings m
+                    , MonadFail m
+                    , MonadThrow m
+                    )
+                 => Name Owner
                  -> Name Repo
                  -> Maybe (Path b)   -- ^ base path where the repo should be cloned
                  -> Maybe ByteString -- ^ PR branch name to switch to
-                 -> IO (Either String ())
-prepareRepoForPR am owner repo repobase branch = runExceptT $ do
+                 -> ExceptT String m ()
+prepareRepoForPR owner repo repobase branch = do
   repodest <- case repobase of
     Just rb ->
-      ((rb </>) <$> (parseRel $ E.encodeUtf8 $ untagName repo)) >>= lift . toAbs
-    Nothing -> (parseRel $ E.encodeUtf8 $ untagName repo) >>= lift . toAbs
-  ForkResult {..} <- withExceptT show $ ExceptT $ forkRepository am owner repo
+      ((rb </>) <$> (parseRel $ E.encodeUtf8 $ untagName repo))
+        >>= liftIO
+        .   toAbs
+    Nothing -> (parseRel $ E.encodeUtf8 $ untagName repo) >>= liftIO . toAbs
+  ForkResult {..} <- withExceptT show $ forkRepository owner repo
   withExceptT show $ ExceptT $ cloneRepository CloneSSH downstream repodest
   withExceptT show $ ExceptT $ setUpstream upstream repodest
   case branch of
@@ -224,21 +238,21 @@ prepareRepoForPR am owner repo repobase branch = runExceptT $ do
     )
 
 
-forkRepository :: AuthMethod am
-               => am
-               -> Name Owner
+forkRepository :: (MonadIO m, MonadReader Settings m)
+               => Name Owner
                -> Name Repo
-               -> IO (Either Error ForkResult)
-forkRepository am owner repo = runExceptT $ do
-  upstream   <- ExceptT $ github' (repositoryR owner repo)
-  downstream <- ExceptT $ github am (forkExistingRepoR owner repo Nothing)
+               -> ExceptT Error m ForkResult
+forkRepository owner repo = do
+  upstream   <- github_ (repositoryR owner repo)
+  downstream <- githubAuth (forkExistingRepoR owner repo Nothing)
   pure $ ForkResult { .. }
 
 
-cloneRepository :: CloneMethod
+cloneRepository :: (MonadIO m, MonadFail m)
+                => CloneMethod
                 -> Repo
                 -> Path b  -- ^ full path where the repo should be cloned to
-                -> IO (Either ProcessError ())
+                -> m (Either ProcessError ())
 cloneRepository CloneSSH (Repo { repoSshUrl = (Just url) }) dest =
   _clone (E.encodeUtf8 $ getUrl url) (toFilePath dest)
 cloneRepository CloneHTTP (Repo { repoCloneUrl = (Just url) }) dest =
@@ -247,9 +261,10 @@ cloneRepository _ _ _ = fail "No clone url!"
 
 
 
-setUpstream :: Repo   -- ^ upstream
+setUpstream :: (MonadIO m, MonadFail m)
+            => Repo   -- ^ upstream
             -> Path b -- ^ full path to repo
-            -> IO (Either ProcessError ())
+            -> m (Either ProcessError ())
 setUpstream (Repo { repoCloneUrl = (Just url) }) repodir = _runGit
   [ u8 "-C"
   , toFilePath repodir
@@ -261,50 +276,48 @@ setUpstream (Repo { repoCloneUrl = (Just url) }) repodir = _runGit
 setUpstream _ _ = fail "No clone url!"
 
 
-createBranch :: ByteString  -- ^ branch name
+createBranch :: MonadIO m
+             => ByteString  -- ^ branch name
              -> Path b      -- ^ full path to repo
-             -> IO (Either ProcessError ())
+             -> m (Either ProcessError ())
 createBranch branch repodir =
   _runGit [u8 "-C", toFilePath repodir, u8 "checkout", u8 "-b", branch]
 
 
 -- | Same as deleteFork, but gets the auth from the config file
 -- and parses the owner/repo from the given repo url string.
-deleteFork' :: ByteString -> IO (Either String ())
-deleteFork' repoString = runExceptT $ do
+deleteFork' :: (MonadIO m, MonadReader Settings m)
+            => ByteString
+            -> ExceptT String m ()
+deleteFork' repoString = do
   UrlParseResult {..} <- liftEither $ parseURL repoString
-  Settings {..}       <- ExceptT getSettings
-  ExceptT $ deleteFork auth owner repo
+  deleteFork owner repo
 
 
-deleteFork :: AuthMethod am
-           => am
-           -> Name Owner
+deleteFork :: (MonadIO m, MonadReader Settings m)
+           => Name Owner
            -> Name Repo
-           -> IO (Either String ())
-deleteFork am owner repo = runExceptT $ do
-  (withExceptT show $ ExceptT $ github' (repositoryR owner repo)) >>= \case
+           -> ExceptT String m ()
+deleteFork owner repo = do
+  (withExceptT show $ github_ (repositoryR owner repo)) >>= \case
     (Repo { repoFork = Just True }) -> pure ()
     _                               -> throwError "Not a fork"
-  withExceptT show $ ExceptT $ github am (deleteRepoR owner repo)
+  withExceptT show $ githubAuth (deleteRepoR owner repo)
 
 
-getForks' :: Maybe UTCTime -> IO (Either String [Repo])
-getForks' mtime = runExceptT $ do
-  Settings {..}       <- ExceptT getSettings
-  withExceptT show $ ExceptT $ getForks auth mtime
 
-
-getForks :: AuthMethod am => am -> Maybe UTCTime -> IO (Either Error [Repo])
-getForks am mtime = runExceptT $ do
-  repos <-
-      ExceptT $ github am (currentUserReposR RepoPublicityAll FetchAll)
+getForks :: (MonadIO m, MonadReader Settings m)
+         => Maybe UTCTime
+         -> ExceptT Error m [Repo]
+getForks mtime = do
+  repos <- githubAuth (currentUserReposR RepoPublicityAll FetchAll)
   pure $ filter
-        (\case
-          Repo { repoFork = Just True, repoUpdatedAt = Just t } ->
-            maybe True (t >=) mtime
-          _                             -> False
-        ) (toList repos)
+    (\case
+      Repo { repoFork = Just True, repoUpdatedAt = Just t } ->
+        maybe True (t >=) mtime
+      _ -> False
+    )
+    (toList repos)
 
 
 
@@ -348,7 +361,7 @@ ghURLParser =
 u8 :: String -> ByteString
 u8 = UTF8.fromString
 
-_clone :: ByteString -> ByteString -> IO (Either ProcessError ())
+_clone :: MonadIO m => ByteString -> ByteString -> m (Either ProcessError ())
 _clone url dest = _runGit [u8 "clone", url, dest]
 
 _toGitError :: Maybe ProcessStatus -> Either ProcessError ()
@@ -359,8 +372,8 @@ _toGitError ps = case ps of
   Just (SPPB.Stopped _             ) -> Left $ ProcessInterrupted
   Nothing                            -> Left $ NoSuchPid
 
-_runGit :: [ByteString] -> IO (Either ProcessError ())
-_runGit args = do
+_runGit :: MonadIO m => [ByteString] -> m (Either ProcessError ())
+_runGit args = liftIO $ do
   pid <- executeFile ([rel|git|] :: Path Rel) args
   SPPB.getProcessStatus True True pid <&> _toGitError
 
@@ -375,14 +388,40 @@ getHomeDirectory = do
       pure $ u8 h -- this is a guess
 
 
-_info :: String -> IO ()
-_info = _stderr . color Green
+_info :: MonadIO m => String -> m ()
+_info = liftIO . _stderr . color Green
 
-_warn :: String -> IO ()
-_warn = _stderr . color Yellow
+_warn :: MonadIO m => String -> m ()
+_warn = liftIO . _stderr . color Yellow
 
-_err :: String -> IO ()
-_err = _stderr . color Red
+_err :: MonadIO m => String -> m ()
+_err = liftIO . _stderr . color Red
 
-_stderr :: String -> IO ()
-_stderr = hPutStrLn stderr
+_stderr :: MonadIO m => String -> m ()
+_stderr = liftIO . hPutStrLn stderr
+
+
+auth :: MonadReader Settings m => m Auth
+auth = asks _auth
+
+basePath :: MonadReader Settings m => m (Maybe (Path Abs))
+basePath = asks _basePath
+
+
+githubAuth :: ( MonadReader Settings m
+              , MonadIO m
+              , ParseResponse mt req
+              , res ~ Either Error req
+              )
+           => (GenRequest mt rw req)
+           -> ExceptT Error m req
+githubAuth req = do
+  a <- auth
+  ExceptT $ liftIO $ github a req
+
+
+github_ :: (MonadIO m, ParseResponse mt req, res ~ Either Error req, ro ~ 'RO)
+        => (GenRequest mt ro req)
+        -> ExceptT Error m req
+github_ req = do
+  ExceptT $ liftIO $ github' req

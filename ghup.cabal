@@ -47,6 +47,7 @@ executable ghup
   build-depends:         base                 ^>= 4.12
                        , bytestring           ^>= 0.10
                        , dates                ^>= 0.2
+                       , errors               ^>= 2.3
                        , ghup
                        , github               ^>= 0.24
                        , hpath                ^>= 0.11

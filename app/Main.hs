@@ -1,7 +1,9 @@
 module Main where
 
+import           Control.Error.Util
 import           Control.Monad
 import           Control.Monad.Except
+import           Control.Monad.Reader
 import           Data.ByteString                ( ByteString )
 import qualified Data.ByteString.UTF8          as UTF8
 import           Data.Dates                     ( getCurrentDateTime
@@ -20,6 +22,7 @@ import           GitHub.Auth
 import           GitHub.Data.Definitions
 import           GitHub.Data.Name
 import           GitHub.Data.Repos
+import           GitHub.Data.URL
 import           HPath
 import           Options.Applicative
 import           Safe
@@ -117,19 +120,30 @@ lForkOpts = ListForkOptions <$> optional
 
 main :: IO ()
 main = do
+  let
+    run e = do
+      settings <-
+        exceptT
+            ( const die
+            . color Red
+            $ "Could not get settings, make sure to run 'ghup config' first"
+            )
+            pure
+          $ getSettings
+      (flip runReaderT) settings . runExceptT . withExceptT show $ e
   e <- execParser (info (opts <**> helper) idm) >>= \case
-    Fork (ForkOptions {..}) -> do
+    Fork (ForkOptions {..}) -> run $ do
       case repoBasePath of
         Just rbp -> case parseAbs rbp of
           Just p  -> prepareRepoForPR' repo (Just p) newBranch
-          Nothing -> fail "Repo path must be absolute"
+          Nothing -> liftIO $ die (color Red $ "Repo path must be absolute")
         Nothing -> prepareRepoForPR' repo Nothing newBranch
     Config (ConfigOptions {..}) -> do
       p <- maybe (pure Nothing) (fmap Just . parseAbs) bPath
       writeSettings (Settings (OAuth oAuth) p) <&> Right
-    Del       (DelOptions {..}     ) -> deleteFork' del
-    ListForks (ListForkOptions {..}) -> runExceptT $ do
-      mtime <- lift $ case lSince of
+    Del       (DelOptions {..}     ) -> run $ deleteFork' del
+    ListForks (ListForkOptions {..}) -> run $ do
+      mtime <- liftIO $ case lSince of
         Just t -> do
           dt <- getCurrentDateTime
           let mt =
@@ -144,16 +158,11 @@ main = do
             )
         Nothing -> pure Nothing
 
-      forks <- ExceptT $ getForks' mtime
-      let formatted = intercalate "\n" $ fmap
-            (\Repo {..} ->
-              T.unpack (untagName $ simpleOwnerLogin repoOwner)
-                <> "/"
-                <> T.unpack (untagName repoName)
-            )
-            forks
-      lift $ putStrLn $ formatted
+      forks <- withExceptT show $ getForks mtime
+      let formatted = intercalate "\n"
+            $ fmap (\Repo {..} -> T.unpack . getUrl $ repoHtmlUrl) forks
+      liftIO $ putStrLn $ formatted
       pure ()
   case e of
-    Right () -> _info "success!"
+    Right () -> pure ()
     Left  t  -> die (color Red $ t)
