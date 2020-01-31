@@ -355,7 +355,7 @@ getHomeDirectory = do
 
 
 _info :: String -> IO ()
-_info = putStrLn . color Green
+_info = _stderr . color Green
 
 _warn :: String -> IO ()
 _warn = _stderr . color Yellow
