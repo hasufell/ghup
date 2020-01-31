@@ -124,9 +124,10 @@ main = do
     run e = do
       settings <-
         exceptT
-            ( const die
-            . color Red
-            $ "Could not get settings, make sure to run 'ghup config' first"
+            (\_ ->
+              die
+                . color Red
+                $ "Could not get settings, make sure to run 'ghup config' first"
             )
             pure
           $ getSettings
