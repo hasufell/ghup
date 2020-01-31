@@ -23,6 +23,8 @@ module GHup
   , createBranch
   , deleteFork'
   , deleteFork
+  , getForks'
+  , getForks
   -- * Parsers
   , parseURL
   , ghURLParser
@@ -43,10 +45,13 @@ import qualified Data.ByteString.Lazy.UTF8     as LUTF8
 import           Data.Functor                   ( (<&>) )
 import           Data.Proxy
 import qualified Data.Text.Encoding            as E
+import           Data.Time.Clock
 import           Data.Word8
+import           GHC.Exts                       ( toList )
 import           GitHub.Auth
 import           GitHub.Data.Name
 import           GitHub.Data.URL
+import           GitHub.Data.Request
 import           GitHub.Endpoints.Repos
 import           GitHub.Request
 import           HPath
@@ -284,6 +289,22 @@ deleteFork am owner repo = runExceptT $ do
   withExceptT show $ ExceptT $ github am (deleteRepoR owner repo)
 
 
+getForks' :: Maybe UTCTime -> IO (Either String [Repo])
+getForks' mtime = runExceptT $ do
+  Settings {..}       <- ExceptT getSettings
+  withExceptT show $ ExceptT $ getForks auth mtime
+
+
+getForks :: AuthMethod am => am -> Maybe UTCTime -> IO (Either Error [Repo])
+getForks am mtime = runExceptT $ do
+  repos <-
+      ExceptT $ github am (currentUserReposR RepoPublicityAll FetchAll)
+  pure $ filter
+        (\case
+          Repo { repoFork = Just True, repoUpdatedAt = Just t } ->
+            maybe True (t >=) mtime
+          _                             -> False
+        ) (toList repos)
 
 
 

@@ -1,13 +1,28 @@
 module Main where
 
 import           Control.Monad
+import           Control.Monad.Except
 import           Data.ByteString                ( ByteString )
+import qualified Data.ByteString.UTF8          as UTF8
+import           Data.Dates                     ( getCurrentDateTime
+                                                , parseDate
+                                                , DateTime(..)
+                                                )
 import           Data.Functor                   ( (<&>) )
+import           Data.List
 import           Data.Semigroup                 ( (<>) )
+import qualified Data.Text                     as T
+import           Data.Time.Clock
+import           Data.Time.Clock.POSIX
+import           Data.Time.Format
 import           GHup
 import           GitHub.Auth
+import           GitHub.Data.Definitions
+import           GitHub.Data.Name
+import           GitHub.Data.Repos
 import           HPath
 import           Options.Applicative
+import           Safe
 import           System.Console.Pretty
 import           System.Exit
 
@@ -21,12 +36,18 @@ data Command
   = Fork ForkOptions
   | Config ConfigOptions
   | Del DelOptions
+  | ListForks ListForkOptions
 
 data ForkOptions = ForkOptions
   {
     repo          :: ByteString
   , newBranch     :: Maybe ByteString
   , repoBasePath  :: Maybe ByteString
+  }
+
+data ListForkOptions = ListForkOptions
+  {
+    lSince        :: Maybe ByteString
   }
 
 data ConfigOptions = ConfigOptions {
@@ -41,9 +62,10 @@ data DelOptions = DelOptions {
 
 opts :: Parser Command
 opts = subparser
-  (  command "fork"   (Fork <$> (info (forkOpts <**> helper) idm))
-  <> command "config" (Config <$> (info (configOpts <**> helper) idm))
-  <> command "delete" (Del <$> (info (delOpts <**> helper) idm))
+  (  command "fork"       (Fork <$> (info (forkOpts <**> helper) idm))
+  <> command "config"     (Config <$> (info (configOpts <**> helper) idm))
+  <> command "delete"     (Del <$> (info (delOpts <**> helper) idm))
+  <> command "list-forks" (ListForks <$> (info (lForkOpts <**> helper) idm))
   )
 
 configOpts :: Parser ConfigOptions
@@ -84,6 +106,14 @@ delOpts :: Parser DelOptions
 delOpts = DelOptions <$> strOption
   (short 'r' <> long "repo" <> metavar "REPO" <> help "The REPO fork to delete")
 
+lForkOpts :: Parser ListForkOptions
+lForkOpts = ListForkOptions <$> optional
+  (strOption
+    (short 's' <> long "since" <> metavar "SINCE" <> help
+      "The repository to fork"
+    )
+  )
+
 
 main :: IO ()
 main = do
@@ -97,7 +127,33 @@ main = do
     Config (ConfigOptions {..}) -> do
       p <- maybe (pure Nothing) (fmap Just . parseAbs) bPath
       writeSettings (Settings (OAuth oAuth) p) <&> Right
-    Del (DelOptions {..}) -> deleteFork' del
+    Del       (DelOptions {..}     ) -> deleteFork' del
+    ListForks (ListForkOptions {..}) -> runExceptT $ do
+      mtime <- lift $ case lSince of
+        Just t -> do
+          dt <- getCurrentDateTime
+          let mt =
+                either (const Nothing) Just . parseDate dt . UTF8.toString $ t
+          pure $ mt >>= \t ->
+            (parseTimeM
+              True
+              defaultTimeLocale
+              "%Y-%-m-%-d"
+              (show (year t) <> "-" <> show (month t) <> "-" <> show (day t)) :: Maybe
+                UTCTime
+            )
+        Nothing -> pure Nothing
+
+      forks <- ExceptT $ getForks' mtime
+      let formatted = intercalate "\n" $ fmap
+            (\Repo {..} ->
+              T.unpack (untagName $ simpleOwnerLogin repoOwner)
+                <> "/"
+                <> T.unpack (untagName repoName)
+            )
+            forks
+      lift $ putStrLn $ formatted
+      pure ()
   case e of
     Right () -> _info "success!"
     Left  t  -> die (color Red $ t)
