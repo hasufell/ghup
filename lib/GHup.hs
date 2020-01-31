@@ -44,6 +44,7 @@ import           Control.Monad.Fail
 import           Control.Monad.Reader    hiding ( fail )
 import           Data.Attoparsec.ByteString
 import           Data.ByteString                ( ByteString )
+import qualified Data.ByteString               as B
 import qualified Data.ByteString.UTF8          as UTF8
 import qualified Data.ByteString.Lazy.UTF8     as LUTF8
 import           Data.Functor                   ( (<&>) )
@@ -361,11 +362,17 @@ ghURLParser =
         *> takeWhile1 (/= _slash)
         <* word8 _slash
         )
-    <*> (takeWhile1 (/= _period) <* ((str ".git" <|> empty') <* endOfInput))
+    <*> parseRepoName
  where
   str    = string . u8
   empty' = str ""
-
+  parseRepoName :: Parser ByteString
+  parseRepoName = do
+    c <- fmap B.singleton anyWord8
+    r <- many1' ((str ".git" <* endOfInput) <|> fmap B.singleton anyWord8)
+    if last r == u8 ".git"
+      then pure $ mconcat (c : (init r))
+      else pure (mconcat (c : r)) <* endOfInput
 
 
 
