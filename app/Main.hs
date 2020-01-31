@@ -124,6 +124,7 @@ lForkOpts = ListForkOptions <$> optional
 
 main :: IO ()
 main = do
+  -- wrapper to run effects with settings
   let run e = do
       settings <- exceptT
             (\_ -> die
@@ -134,16 +135,24 @@ main = do
           $ getSettings
       (flip runReaderT) settings . runExceptT . withExceptT show $ e
   e <- execParser (info (opts <**> helper) idm) >>= \case
+
+    -- fork
     Fork (ForkOptions {..}) -> run $ do
       case repoBasePath of
         Just rbp -> case parseAbs rbp of
           Just p  -> prepareRepoForPR' repo (Just p) newBranch
           Nothing -> liftIO $ die (color Red $ "Repo path must be absolute")
         Nothing -> prepareRepoForPR' repo Nothing newBranch
+
+    -- config
     Config (ConfigOptions {..}) -> do
       p <- maybe (pure Nothing) (fmap Just . parseAbs) bPath
       writeSettings (Settings (OAuth oAuth) p) <&> Right
+
+    -- delete
     Del       (DelOptions {..}     ) -> run $ deleteFork' del
+
+    -- list-forks
     ListForks (ListForkOptions {..}) -> run $ do
       mtime <- liftIO $ case lSince of
         Just t -> do
@@ -174,6 +183,8 @@ main = do
                   forks
       liftIO $ putStrLn $ formatted
       pure ()
+
+  -- print error, if any
   case e of
     Right () -> pure ()
     Left  t  -> die (color Red $ t)
