@@ -63,10 +63,10 @@ data DelOptions = DelOptions {
 
 opts :: Parser Command
 opts = subparser
-  (  command "fork"       (Fork <$> (info (forkOpts <**> helper) idm))
-  <> command "config"     (Config <$> (info (configOpts <**> helper) idm))
-  <> command "delete"     (Del <$> (info (delOpts <**> helper) idm))
-  <> command "list-forks" (ListForks <$> (info (lForkOpts <**> helper) idm))
+  (  command "fork"       (Fork <$> (info (forkOpts <**> helper) (progDesc "Fork a repository")))
+  <> command "config"     (Config <$> (info (configOpts <**> helper) (progDesc "Set ghup config (such as OAuth)")))
+  <> command "delete"     (Del <$> (info (delOpts <**> helper) (progDesc "Delete a forked repository")))
+  <> command "list-forks" (ListForks <$> (info (lForkOpts <**> helper) (progDesc "List my forks")))
   )
 
 configOpts :: Parser ConfigOptions
