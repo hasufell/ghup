@@ -358,10 +358,10 @@ ghURLParser =
            <|> str "git@github.com:"
            <|> empty'
            )
-        *> takeWhile1 (\w -> (w /= _slash) && isAlphaNum w)
+        *> takeWhile1 (/= _slash)
         <* word8 _slash
         )
-    <*> (takeWhile1 isAlphaNum <* ((str ".git" <|> empty') <* endOfInput))
+    <*> (takeWhile1 (/= _period) <* ((str ".git" <|> empty') <* endOfInput))
  where
   str    = string . u8
   empty' = str ""
