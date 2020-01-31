@@ -12,11 +12,14 @@ import           Data.Dates                     ( getCurrentDateTime
                                                 )
 import           Data.Functor                   ( (<&>) )
 import           Data.List
+import           Data.Maybe
 import           Data.Semigroup                 ( (<>) )
 import qualified Data.Text                     as T
+import           Data.Time.Calendar
 import           Data.Time.Clock
 import           Data.Time.Clock.POSIX
 import           Data.Time.Format
+import           Data.Time.Format.ISO8601
 import           GHup
 import           GitHub.Auth
 import           GitHub.Data.Definitions
@@ -160,8 +163,13 @@ main = do
         Nothing -> pure Nothing
 
       forks <- withExceptT show $ getForks mtime
-      let formatted = intercalate "\n"
-            $ fmap (\Repo {..} -> T.unpack . getUrl $ repoHtmlUrl) forks
+      let formatted = intercalate "\n" $ fmap
+            (\Repo {..} ->
+              (T.unpack . getUrl $ repoHtmlUrl) <> " " <> formatShow
+                (iso8601Format :: Format Day)
+                (utctDay $ fromJust repoUpdatedAt)
+            )
+            forks
       liftIO $ putStrLn $ formatted
       pure ()
   case e of

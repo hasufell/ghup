@@ -47,6 +47,7 @@ import           Data.ByteString                ( ByteString )
 import qualified Data.ByteString.UTF8          as UTF8
 import qualified Data.ByteString.Lazy.UTF8     as LUTF8
 import           Data.Functor                   ( (<&>) )
+import           Data.List
 import           Data.Proxy
 import qualified Data.Text                     as T
 import qualified Data.Text.Encoding            as E
@@ -325,7 +326,7 @@ getForks :: (MonadIO m, MonadReader Settings m)
          -> ExceptT Error m [Repo]
 getForks mtime = do
   repos <- githubAuth (currentUserReposR RepoPublicityAll FetchAll)
-  pure $ filter
+  pure $ sortBy (\x y -> compare (repoUpdatedAt y) (repoUpdatedAt x)) $ filter
     (\case
       Repo { repoFork = Just True, repoUpdatedAt = Just t } ->
         maybe True (t >=) mtime
