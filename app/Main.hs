@@ -128,7 +128,7 @@ main = do
               pure
             $ getSettings
         (flip runReaderT) settings . runExceptT . withExceptT show $ e
-  e <- execParser (info (opts <**> helper) idm) >>= \case
+  e <- customExecParser (prefs showHelpOnError) (info (opts <**> helper) idm) >>= \case
 
     -- fork
     Fork (ForkOptions {..}) -> run $ do
