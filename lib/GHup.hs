@@ -60,6 +60,8 @@ import           GitHub.Data.Name
 import           GitHub.Data.URL
 import           GitHub.Data.Request
 import           GitHub.Endpoints.Repos
+import           GitHub.Endpoints.Search
+import           GitHub.Endpoints.Users
 import           GitHub.Request
 import           HPath
 import           HPath.IO
@@ -326,14 +328,17 @@ getForks :: (MonadIO m, MonadReader Settings m)
          => Maybe UTCTime
          -> ExceptT Error m [Repo]
 getForks mtime = do
-  repos <- githubAuth (currentUserReposR RepoPublicityAll FetchAll)
+  user <- githubAuth userInfoCurrentR
+  let userName = untagName $ userLogin user
+  repos <- github_
+    (searchReposR $ mconcat [T.pack "user:", userName, T.pack " fork:only"])
   pure $ sortBy (\x y -> compare (repoUpdatedAt y) (repoUpdatedAt x)) $ filter
     (\case
       Repo { repoFork = Just True, repoUpdatedAt = Just t } ->
         maybe True (t >=) mtime
       _ -> False
     )
-    (toList repos)
+    (toList $ searchResultResults repos)
 
 
 
