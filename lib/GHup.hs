@@ -202,9 +202,9 @@ prepareRepoForPR' :: ( MonadIO m
                   => ByteString       -- ^ string that contains repo url
                   -> Maybe (Path b)   -- ^ base path where the repo should be cloned
                   -> Maybe ByteString -- ^ PR branch name to switch to
-                  -> ExceptT String m ()
+                  -> ExceptT Error m ()
 prepareRepoForPR' repoString mRepobase branch = do
-  UrlParseResult {..} <- liftEither $ parseURL repoString
+  UrlParseResult {..} <- (liftEither $ parseURL repoString) ?* uError
   repobase            <- case mRepobase of
     Just r  -> fmap Just $ liftIO $ toAbs r
     Nothing -> basePath
@@ -223,7 +223,7 @@ prepareRepoForPR :: ( MonadIO m
                  -> Name Repo
                  -> Maybe (Path b)   -- ^ base path where the repo should be cloned
                  -> Maybe ByteString -- ^ PR branch name to switch to
-                 -> ExceptT String m ()
+                 -> ExceptT Error m ()
 prepareRepoForPR owner repo repobase branch = do
   repodest <- case repobase of
     Just rb ->
@@ -231,11 +231,11 @@ prepareRepoForPR owner repo repobase branch = do
         >>= liftIO
         .   toAbs
     Nothing -> (parseRel $ E.encodeUtf8 $ untagName repo) >>= liftIO . toAbs
-  ForkResult {..} <- withExceptT show $ forkRepository owner repo
-  withExceptT show $ ExceptT $ cloneRepository CloneSSH downstream repodest
-  withExceptT show $ ExceptT $ setUpstream upstream repodest
+  ForkResult {..} <- (forkRepository owner repo) ?* (uError . show)
+  (ExceptT $ cloneRepository CloneSSH downstream repodest) ?* (uError . show)
+  (ExceptT $ setUpstream upstream repodest) ?* (uError . show)
   case branch of
-    Just b  -> withExceptT show $ ExceptT $ createBranch b repodest
+    Just b  -> (ExceptT $ createBranch b repodest) ?* (uError . show)
     Nothing -> pure ()
   lift $ _info
     (  "To change to the repo dir, run:\n\tcd "
@@ -307,10 +307,10 @@ forkRepository owner repo = do
 -- and parses the owner/repo from the given repo url string.
 deleteFork' :: (MonadIO m, MonadReader Settings m)
             => ByteString
-            -> ExceptT String m ()
+            -> ExceptT Error m ()
 deleteFork' repoString = do
-  UrlParseResult {..} <- liftEither $ parseURL repoString
-  withExceptT show $ deleteFork owner repo
+  UrlParseResult {..} <- (liftEither $ parseURL repoString) ?* uError
+  deleteFork owner repo
 
 
 deleteFork :: (MonadIO m, MonadReader Settings m)
@@ -320,7 +320,7 @@ deleteFork :: (MonadIO m, MonadReader Settings m)
 deleteFork owner repo = do
   github_ (repositoryR owner repo) >>= \case
     (Repo { repoFork = Just True }) -> pure ()
-    _ -> throwError (UserError $ T.pack "Not a fork")
+    _ -> throwError (uError "Not a fork")
   githubAuth (deleteRepoR owner repo)
 
 
@@ -453,3 +453,12 @@ github_ :: (MonadIO m, ParseResponse mt req, res ~ Either Error req, ro ~ 'RO)
         -> ExceptT Error m req
 github_ req = do
   ExceptT $ liftIO $ github' req
+
+
+-- | Flipped 'withExceptT'.
+(?*) :: Functor m => ExceptT e m a -> (e -> e') -> ExceptT e' m a
+(?*) = flip withExceptT
+
+
+uError :: String -> Error
+uError = UserError . T.pack
