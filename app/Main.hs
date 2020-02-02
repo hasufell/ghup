@@ -42,6 +42,7 @@ data Command
   | Del DelOptions
   | ListForks ListForkOptions
   | CreateGist CreateGistOptions
+  | ListGist ListGistOptions
 
 data ForkOptions = ForkOptions
   {
@@ -73,6 +74,12 @@ data CreateGistOptions = CreateGistOptions {
 data Input
   = FileInput [ByteString]
   | StdInput
+
+data ListGistOptions = ListGistOptions
+  {
+    lgSince        :: Maybe ByteString
+  , lgDesc         :: Bool
+  }
 
 fileInput :: Parser Input
 fileInput =
@@ -117,9 +124,12 @@ opts = subparser
        <$> (info (lForkOpts <**> helper) (progDesc "List my forks"))
        )
   <> command
-       "gist"
+       "gistc"
        (CreateGist <$> (info (cGistOpts <**> helper) (progDesc "Create gist"))
        )
+  <> command
+       "gistl"
+       (ListGist <$> (info (lGistOpts <**> helper) (progDesc "List gists")))
   )
 
 configOpts :: Parser ConfigOptions
@@ -183,6 +193,20 @@ cGistOpts =
             "Whether gist should be private (default: public)"
           )
 
+lGistOpts :: Parser ListGistOptions
+lGistOpts =
+  ListGistOptions
+    <$> optional
+          (strOption
+            (short 's' <> long "since" <> metavar "SINCE" <> help
+              "The repository to fork"
+            )
+          )
+    <*> switch
+          (short 'd' <> long "descriptions" <> help
+            "Whether to show descriptions (default: False)"
+          )
+
 
 main :: IO ()
 main = do
@@ -222,26 +246,7 @@ main = do
 
             -- list-forks
             ListForks (ListForkOptions {..}) -> run $ do
-              mtime <- liftIO $ case lSince of
-                Just t' -> do
-                  dt <- getCurrentDateTime
-                  let
-                    mt =
-                      either (const Nothing) Just
-                        . parseDate dt
-                        . UTF8.toString
-                        $ t'
-                  pure $ mt >>= \t ->
-                    (parseTimeM
-                      True
-                      defaultTimeLocale
-                      "%Y-%-m-%-d"
-                      (show (year t) <> "-" <> show (month t) <> "-" <> show
-                        (day t)
-                      ) :: Maybe UTCTime
-                    )
-                Nothing -> pure Nothing
-
+              mtime <- parseSince lSince
               forks <- withExceptT show $ getForks mtime
               let
                 formatted =
@@ -258,7 +263,7 @@ main = do
               liftIO $ putStrLn $ formatted
               pure ()
 
-            -- gist
+            -- gistc
             CreateGist (CreateGistOptions {..}) -> run $ do
               let desc   = maybe T.empty E.decodeUtf8 description
                   public = not private
@@ -276,8 +281,54 @@ main = do
                   postGistFiles files' desc public
               liftIO $ putStrLn $ T.unpack $ getUrl $ gistHtmlUrl gist
 
+            -- gistl
+            ListGist (ListGistOptions {..}) -> run $ do
+              mtime <- parseSince lgSince
+              gists <- listGists mtime
+              let
+                formatted =
+                  gridString
+                      (  [column expand left def def]
+                      <> (if lgDesc then [column expand left def def] else [])
+                      <> [column expand left def def]
+                      )
+                    $ fmap
+                        (\Gist {..} ->
+                          [(T.unpack . getUrl $ gistHtmlUrl)]
+                            <> (if lgDesc
+                                 then
+                                   [ T.unpack $ fromMaybe (T.pack "(No desc)")
+                                                          gistDescription
+                                   ]
+                                 else []
+                               )
+                            <> [ formatShow (iso8601Format :: Format Day)
+                                            (utctDay gistUpdatedAt)
+                               ]
+                        )
+                        gists
+              liftIO $ putStrLn $ formatted
+
+
 
   -- print error, if any
   case e of
     Right () -> pure ()
     Left  t  -> die (color Red $ t)
+
+ where
+  parseSince lSince = do
+    liftIO $ case lSince of
+      Just t' -> do
+        dt <- getCurrentDateTime
+        let mt =
+              either (const Nothing) Just . parseDate dt . UTF8.toString $ t'
+        pure $ mt >>= \t ->
+          (parseTimeM
+            True
+            defaultTimeLocale
+            "%Y-%-m-%-d"
+            (show (year t) <> "-" <> show (month t) <> "-" <> show (day t)) :: Maybe
+              UTCTime
+          )
+      Nothing -> pure Nothing

@@ -33,6 +33,7 @@ module GHup
   , postGistStdin
   , postGistFiles
   , postGist
+  , listGists
   -- * Parsers
   , parseURL
   , ghURLParser
@@ -67,6 +68,8 @@ import qualified Data.Text.Encoding            as E
 import qualified Data.Text.IO                  as T
 import           Data.Traversable
 import           Data.Time.Clock
+import           Data.Time.Format.ISO8601
+import qualified Data.Vector                   as V
 import           Data.Word8
 import           GHC.Exts                       ( toList )
 import           GitHub.Auth
@@ -396,6 +399,17 @@ postGist :: (MonadIO m, MonadReader Settings m)
          => GistRequest
          -> ExceptT Error m Gist
 postGist greq = githubAuth (command Post [T.pack "gists"] (encode greq))
+
+
+listGists :: (MonadIO m, MonadReader Settings m)
+          => Maybe UTCTime
+          -> ExceptT Error m [Gist]
+listGists mtime = do
+  let queryString = case mtime of
+        Just time -> [(u8 "since", Just $ UTF8.fromString $ iso8601Show time)]
+        Nothing   -> []
+  V.toList <$> githubAuth (pagedQuery [T.pack "gists"] queryString FetchAll)
+
 
 
 
