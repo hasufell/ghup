@@ -18,7 +18,8 @@ library
   exposed-modules:     GHup
   -- other-modules:
   -- other-extensions:
-  build-depends:         attoparsec      ^>= 0.13
+  build-depends:         aeson           ^>= 1.4
+                       , attoparsec      ^>= 0.13
                        , base            ^>= 4.12
                        , bytestring      ^>= 0.10
                        , github          ^>= 0.24
@@ -32,6 +33,7 @@ library
                        , text            ^>= 1.2
                        , time            ^>= 1.9
                        , unix            ^>= 2.7
+                       , unordered-containers ^>= 0.2
                        , utf8-string     ^>= 1.0
                        , vector          ^>= 0.12
                        , word8           ^>= 0.1

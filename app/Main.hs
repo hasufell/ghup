@@ -13,12 +13,15 @@ import           Data.Functor                   ( (<&>) )
 import           Data.Maybe
 import           Data.Semigroup                 ( (<>) )
 import qualified Data.Text                     as T
+import qualified Data.Text.Encoding            as E
 import           Data.Time.Calendar
 import           Data.Time.Clock
 import           Data.Time.Format
 import           Data.Time.Format.ISO8601
+import           Data.Traversable
 import           GHup
 import           GitHub.Auth
+import           GitHub.Data.Gists
 import           GitHub.Data.Repos
 import           GitHub.Data.URL
 import           HPath
@@ -38,6 +41,7 @@ data Command
   | Config ConfigOptions
   | Del DelOptions
   | ListForks ListForkOptions
+  | CreateGist CreateGistOptions
 
 data ForkOptions = ForkOptions
   {
@@ -56,17 +60,66 @@ data ConfigOptions = ConfigOptions {
   , bPath :: Maybe ByteString
   }
 
-
 data DelOptions = DelOptions {
   del :: ByteString
   }
 
+data CreateGistOptions = CreateGistOptions {
+    input :: Input
+  , description :: Maybe ByteString
+  , private :: Bool
+}
+
+data Input
+  = FileInput [ByteString]
+  | StdInput
+
+fileInput :: Parser Input
+fileInput =
+  FileInput
+    <$> (some
+          (strOption
+            (long "file" <> short 'f' <> metavar "FILENAME" <> help
+              "Input one or more files"
+            )
+          )
+        )
+
+stdInput :: Parser Input
+stdInput = flag' StdInput (long "stdin" <> help "Read from stdin")
+
+inputP :: Parser Input
+inputP = fileInput <|> stdInput
+
+
 opts :: Parser Command
 opts = subparser
-  (  command "fork"       (Fork <$> (info (forkOpts <**> helper) (progDesc "Fork a repository")))
-  <> command "config"     (Config <$> (info (configOpts <**> helper) (progDesc "Set ghup config (such as OAuth)")))
-  <> command "delete"     (Del <$> (info (delOpts <**> helper) (progDesc "Delete a forked repository")))
-  <> command "list-forks" (ListForks <$> (info (lForkOpts <**> helper) (progDesc "List my forks")))
+  (  command
+      "fork"
+      (Fork <$> (info (forkOpts <**> helper) (progDesc "Fork a repository")))
+  <> command
+       "config"
+       (   Config
+       <$> (info (configOpts <**> helper)
+                 (progDesc "Set ghup config (such as OAuth)")
+           )
+       )
+  <> command
+       "delete"
+       (   Del
+       <$> (info (delOpts <**> helper)
+                 (progDesc "Delete a forked repository")
+           )
+       )
+  <> command
+       "list-forks"
+       (   ListForks
+       <$> (info (lForkOpts <**> helper) (progDesc "List my forks"))
+       )
+  <> command
+       "gist"
+       (CreateGist <$> (info (cGistOpts <**> helper) (progDesc "Create gist"))
+       )
   )
 
 configOpts :: Parser ConfigOptions
@@ -115,68 +168,114 @@ lForkOpts = ListForkOptions <$> optional
     )
   )
 
+cGistOpts :: Parser CreateGistOptions
+cGistOpts =
+  CreateGistOptions
+    <$> inputP
+    <*> optional
+          (strOption
+            (short 'd' <> long "description" <> metavar "DESCRIPTION" <> help
+              "The description of the gist (optional)"
+            )
+          )
+    <*> switch
+          (short 'p' <> long "private" <> help
+            "Whether gist should be private (default: public)"
+          )
+
 
 main :: IO ()
 main = do
   -- wrapper to run effects with settings
-  let run e = do
-        settings <- exceptT
-              (\_ -> die
-                  . color Red
-                  $ "Could not get settings, make sure to run 'ghup config' first"
-              )
-              pure
-            $ getSettings
-        (flip runReaderT) settings . runExceptT . withExceptT show $ e
-  e <- customExecParser (prefs showHelpOnError) (info (opts <**> helper) idm) >>= \case
+  let
+    run e = do
+      settings <-
+        exceptT
+            (\_ ->
+              die
+                . color Red
+                $ "Could not get settings, make sure to run 'ghup config' first"
+            )
+            pure
+          $ getSettings
+      (flip runReaderT) settings . runExceptT . withExceptT show $ e
+  e <-
+    customExecParser (prefs showHelpOnError) (info (opts <**> helper) idm)
+      >>= \case
 
     -- fork
-    Fork (ForkOptions {..}) -> run $ do
-      case repoBasePath of
-        Just rbp -> case parseAbs rbp of
-          Just p  -> prepareRepoForPR' repo (Just p) newBranch
-          Nothing -> liftIO $ die (color Red $ "Repo path must be absolute")
-        Nothing -> prepareRepoForPR' repo Nothing newBranch
+            Fork (ForkOptions {..}) -> run $ do
+              case repoBasePath of
+                Just rbp -> case parseAbs rbp of
+                  Just p -> prepareRepoForPR' repo (Just p) newBranch
+                  Nothing ->
+                    liftIO $ die (color Red $ "Repo path must be absolute")
+                Nothing -> prepareRepoForPR' repo Nothing newBranch
 
-    -- config
-    Config (ConfigOptions {..}) -> do
-      p <- maybe (pure Nothing) (fmap Just . parseAbs) bPath
-      writeSettings (Settings (OAuth oAuth) p) <&> Right
+            -- config
+            Config (ConfigOptions {..}) -> do
+              p <- maybe (pure Nothing) (fmap Just . parseAbs) bPath
+              writeSettings (Settings (OAuth oAuth) p) <&> Right
 
-    -- delete
-    Del       (DelOptions {..}     ) -> run $ deleteFork' del
+            -- delete
+            Del       (DelOptions {..}     ) -> run $ deleteFork' del
 
-    -- list-forks
-    ListForks (ListForkOptions {..}) -> run $ do
-      mtime <- liftIO $ case lSince of
-        Just t' -> do
-          dt <- getCurrentDateTime
-          let mt =
-                either (const Nothing) Just . parseDate dt . UTF8.toString $ t'
-          pure $ mt >>= \t ->
-            (parseTimeM
-              True
-              defaultTimeLocale
-              "%Y-%-m-%-d"
-              (show (year t) <> "-" <> show (month t) <> "-" <> show (day t)) :: Maybe
-                UTCTime
-            )
-        Nothing -> pure Nothing
+            -- list-forks
+            ListForks (ListForkOptions {..}) -> run $ do
+              mtime <- liftIO $ case lSince of
+                Just t' -> do
+                  dt <- getCurrentDateTime
+                  let
+                    mt =
+                      either (const Nothing) Just
+                        . parseDate dt
+                        . UTF8.toString
+                        $ t'
+                  pure $ mt >>= \t ->
+                    (parseTimeM
+                      True
+                      defaultTimeLocale
+                      "%Y-%-m-%-d"
+                      (show (year t) <> "-" <> show (month t) <> "-" <> show
+                        (day t)
+                      ) :: Maybe UTCTime
+                    )
+                Nothing -> pure Nothing
 
-      forks <- withExceptT show $ getForks mtime
-      let formatted =
-            gridString [column expand left def def
-                       ,column expand left def def]
-              $ fmap
-                  (\Repo {..} ->
-                    [ (T.unpack . getUrl $ repoHtmlUrl)
-                    , formatShow (iso8601Format :: Format Day)
-                                 (utctDay $ fromJust repoUpdatedAt)
-                    ]
-                  )
-                  forks
-      liftIO $ putStrLn $ formatted
-      pure ()
+              forks <- withExceptT show $ getForks mtime
+              let
+                formatted =
+                  gridString
+                      [column expand left def def, column expand left def def]
+                    $ fmap
+                        (\Repo {..} ->
+                          [ (T.unpack . getUrl $ repoHtmlUrl)
+                          , formatShow (iso8601Format :: Format Day)
+                                       (utctDay $ fromJust repoUpdatedAt)
+                          ]
+                        )
+                        forks
+              liftIO $ putStrLn $ formatted
+              pure ()
+
+            -- gist
+            CreateGist (CreateGistOptions {..}) -> run $ do
+              let desc   = maybe T.empty E.decodeUtf8 description
+                  public = not private
+              gist <- case input of
+                StdInput        -> postGistStdin desc public
+                FileInput files -> do
+                  files' <- for files $ \file -> do
+                    let absPath = parseAbs file
+                    let relPath = parseRel file
+                    case (absPath, relPath) of
+                      (Just a, _) -> pure $ AnyPath $ a
+                      (_, Just a) -> pure $ AnyPath $ a
+                      _ -> throwError (uError "Could not parse path")
+
+                  postGistFiles files' desc public
+              liftIO $ putStrLn $ T.unpack $ getUrl $ gistHtmlUrl gist
+
 
   -- print error, if any
   case e of

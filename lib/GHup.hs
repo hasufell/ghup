@@ -2,15 +2,18 @@
 {-# LANGUAGE DeriveGeneric      #-}
 {-# LANGUAGE FlexibleContexts   #-}
 {-# LANGUAGE FlexibleInstances  #-}
+{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE QuasiQuotes        #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TemplateHaskell    #-}
 {-# LANGUAGE TypeFamilies       #-}
 {-# OPTIONS_GHC -Wno-orphans    #-}
 
 module GHup
   (
   -- * Types
-    ForkResult(..)
+    AnyPath(..)
+  , ForkResult(..)
   , CloneMethod(..)
   , ProcessError(..)
   , Settings(..)
@@ -27,6 +30,9 @@ module GHup
   , deleteFork'
   , deleteFork
   , getForks
+  , postGistStdin
+  , postGistFiles
+  , postGist
   -- * Parsers
   , parseURL
   , ghURLParser
@@ -34,6 +40,7 @@ module GHup
   , _info
   , _warn
   , _err
+  , uError
   )
 where
 
@@ -42,20 +49,28 @@ import           Control.Exception.Safe
 import           Control.Monad.Except    hiding ( fail )
 import           Control.Monad.Fail
 import           Control.Monad.Reader    hiding ( fail )
+import           Data.Aeson
+import           Data.Aeson.TH
 import           Data.Attoparsec.ByteString
 import           Data.ByteString                ( ByteString )
 import qualified Data.ByteString               as B
+import qualified Data.ByteString.Lazy          as L
 import qualified Data.ByteString.UTF8          as UTF8
 import qualified Data.ByteString.Lazy.UTF8     as LUTF8
 import           Data.Functor                   ( (<&>) )
+import qualified Data.HashMap.Strict           as H
+import           Data.HashMap.Strict            ( HashMap )
 import           Data.List
 import           Data.Proxy
 import qualified Data.Text                     as T
 import qualified Data.Text.Encoding            as E
+import qualified Data.Text.IO                  as T
+import           Data.Traversable
 import           Data.Time.Clock
 import           Data.Word8
 import           GHC.Exts                       ( toList )
 import           GitHub.Auth
+import           GitHub.Data.Gists
 import           GitHub.Data.Name
 import           GitHub.Data.URL
 import           GitHub.Data.Request
@@ -129,6 +144,8 @@ instance Read (Path Abs) where
             Nothing -> []
           _ -> []
 
+
+data AnyPath = forall a . AnyPath (Path a)
 
 
 
@@ -320,7 +337,7 @@ deleteFork :: (MonadIO m, MonadReader Settings m)
 deleteFork owner repo = do
   github_ (repositoryR owner repo) >>= \case
     (Repo { repoFork = Just True }) -> pure ()
-    _ -> throwError (uError "Not a fork")
+    _                               -> throwError (uError "Not a fork")
   githubAuth (deleteRepoR owner repo)
 
 
@@ -340,6 +357,45 @@ getForks mtime = do
     )
     (toList $ searchResultResults repos)
 
+
+data GistContent = GistContent {
+  content :: T.Text
+} deriving (Show, Eq)
+
+data GistRequest = GistRequest {
+    description :: T.Text
+  , public :: Bool
+  , files :: HashMap T.Text GistContent
+} deriving (Show, Eq)
+
+
+postGistStdin :: (MonadIO m, MonadReader Settings m, MonadThrow m)
+              => T.Text     -- ^ description
+              -> Bool       -- ^ whether to be public
+              -> ExceptT Error m Gist
+postGistStdin description public = do
+  content <- liftIO T.getContents
+  let files = H.fromList [(T.pack "stdout", GistContent content)]
+  postGist GistRequest { .. }
+
+
+postGistFiles :: (MonadIO m, MonadReader Settings m, MonadThrow m)
+              => [AnyPath]  -- ^ files
+              -> T.Text     -- ^ description
+              -> Bool       -- ^ whether to be public
+              -> ExceptT Error m Gist
+postGistFiles files' description public = do
+  files <- liftIO $ fmap H.fromList $ for files' $ \(AnyPath file) -> do
+    contents <- (E.decodeUtf8 . L.toStrict) <$> readFile file
+    filename <- (E.decodeUtf8 . toFilePath) <$> basename file
+    pure (filename, GistContent contents)
+  postGist GistRequest { .. }
+
+
+postGist :: (MonadIO m, MonadReader Settings m)
+         => GistRequest
+         -> ExceptT Error m Gist
+postGist greq = githubAuth (command Post [T.pack "gists"] (encode greq))
 
 
 
@@ -462,3 +518,6 @@ github_ req = do
 
 uError :: String -> Error
 uError = UserError . T.pack
+
+$(deriveJSON defaultOptions 'GistContent)
+$(deriveJSON defaultOptions 'GistRequest)
