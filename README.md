@@ -35,4 +35,6 @@ Available commands:
   config                   Set ghup config (such as OAuth)
   delete                   Delete a forked repository
   list-forks               List my forks
+  gistc                    Create gist
+  gistl                    List gists
 ```
